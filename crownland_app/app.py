@@ -6,7 +6,6 @@ Run with:
     ANTHROPIC_API_KEY=your-key uvicorn app:app --reload --port 8000
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -16,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ai import stream_chat
-from scraper import get_knowledge_base, KNOWLEDGE_BASE
+from scraper import get_kb_section
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -26,12 +25,19 @@ BASE_DIR = Path(__file__).parent
 
 app = FastAPI(title="CrownClaw — NL Crown Land Finder", version="1.0.0")
 
-# Static assets (CSS, JS, images)
 static_dir = BASE_DIR / "static"
 static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+def _kb_response(key: str) -> JSONResponse:
+    """Return a JSONResponse for a top-level knowledge-base section."""
+    return JSONResponse(get_kb_section(key))
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -46,44 +52,32 @@ async def index(request: Request):
 @app.get("/api/guide")
 async def get_guide():
     """Return the step-by-step application wizard data."""
-    kb = get_knowledge_base()
-    steps = kb.get("application_steps", KNOWLEDGE_BASE["application_steps"])["general"]
-    return JSONResponse({"steps": steps})
+    return JSONResponse({"steps": get_kb_section("application_steps")["general"]})
 
 
 @app.get("/api/tenure-types")
 async def get_tenure_types():
-    """Return all tenure type definitions."""
-    kb = get_knowledge_base()
-    return JSONResponse(kb.get("tenure_types", KNOWLEDGE_BASE["tenure_types"]))
+    return _kb_response("tenure_types")
 
 
 @app.get("/api/fees")
 async def get_fees():
-    """Return current fee schedule."""
-    kb = get_knowledge_base()
-    return JSONResponse(kb.get("fees", KNOWLEDGE_BASE["fees"]))
+    return _kb_response("fees")
 
 
 @app.get("/api/offices")
 async def get_offices():
-    """Return regional office contact details."""
-    kb = get_knowledge_base()
-    return JSONResponse(kb.get("regional_offices", KNOWLEDGE_BASE["regional_offices"]))
+    return _kb_response("regional_offices")
 
 
 @app.get("/api/restrictions")
 async def get_restrictions():
-    """Return common restrictions that apply to Crown Land applications."""
-    kb = get_knowledge_base()
-    return JSONResponse(kb.get("restrictions", KNOWLEDGE_BASE["restrictions"]))
+    return _kb_response("restrictions")
 
 
 @app.get("/api/resources")
 async def get_resources():
-    """Return helpful online links."""
-    kb = get_knowledge_base()
-    return JSONResponse(kb.get("online_resources", KNOWLEDGE_BASE["online_resources"]))
+    return _kb_response("online_resources")
 
 
 @app.post("/api/chat")

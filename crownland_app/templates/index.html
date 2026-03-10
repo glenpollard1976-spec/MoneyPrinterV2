@@ -647,12 +647,13 @@ let selectedLatLng = null;  // from map click
 let map, markerLayer, drawLayer;
 
 /* ----------------------------------------------------------------
-   Tab switching
+   Tab switching — tab names derived from the DOM, not hardcoded
    ---------------------------------------------------------------- */
 function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    const tabNames = ['chat', 'guide', 'info'];
-    b.classList.toggle('active', tabNames[i] === name);
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    // Each tab button calls switchTab('X'); extract X from the onclick attribute
+    const match = b.getAttribute('onclick')?.match(/switchTab\('(\w+)'\)/);
+    if (match) b.classList.toggle('active', match[1] === name);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
@@ -689,7 +690,7 @@ function handleKey(e) {
   }
 }
 
-async function sendQuick(text) {
+function sendQuick(text) {
   document.getElementById('chatInput').value = text;
   sendMessage();
 }
@@ -717,12 +718,26 @@ async function sendMessage() {
   const botEl = document.createElement('div');
   botEl.className = 'msg bot';
   let accumulatedMd = '';
+  // Debounce markdown re-render to at most once per animation frame
+  let rafPending = false;
+  function scheduleRender() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      botEl.innerHTML = marked.parse(accumulatedMd);
+      scrollChat();
+      rafPending = false;
+    });
+  }
+
+  // Cap history to last 40 messages (20 pairs) to bound payload size
+  const MAX_HISTORY = 40;
 
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages })
+      body: JSON.stringify({ messages: messages.slice(-MAX_HISTORY) })
     });
 
     typingEl.remove();
@@ -747,23 +762,26 @@ async function sendMessage() {
           const ev = JSON.parse(line.slice(6));
           if (ev.type === 'text') {
             accumulatedMd += ev.text;
-            botEl.innerHTML = marked.parse(accumulatedMd);
-            scrollChat();
+            scheduleRender();
           } else if (ev.type === 'tool_start') {
-            // Show "looking up…" badge above the typing message
+            // Tool badge scoped to this message container (class, not id)
             const badge = document.createElement('div');
-            badge.className = 'tool-badge';
-            badge.id = 'tool-badge-active';
+            badge.className = 'tool-badge tool-badge-active';
             badge.textContent = `🔍 Looking up ${ev.tool.replace(/_/g, ' ')}…`;
             botEl.before(badge);
           } else if (ev.type === 'tool_result') {
-            const oldBadge = document.getElementById('tool-badge-active');
-            if (oldBadge) oldBadge.remove();
+            // Remove the most recent active badge for this response
+            const oldBadge = botEl.previousElementSibling;
+            if (oldBadge?.classList.contains('tool-badge-active')) oldBadge.remove();
           } else if (ev.type === 'done') {
-            // Save assistant message
             messages.push({ role: 'assistant', content: accumulatedMd });
           } else if (ev.type === 'error') {
-            botEl.innerHTML = `<span style="color:#c0392b">⚠️ ${ev.text}</span>`;
+            // Use textContent to prevent XSS from server-supplied error strings
+            const errSpan = document.createElement('span');
+            errSpan.style.color = '#c0392b';
+            errSpan.textContent = '⚠️ ' + ev.text;
+            botEl.innerHTML = '';
+            botEl.appendChild(errSpan);
           }
         } catch (_) {}
       }
@@ -1007,16 +1025,6 @@ function initMap() {
     showMapInfo(lat, lng, null);
   });
 
-  // NL province outline (simplified bounding box)
-  addNLBoundaryHint();
-}
-
-function addNLBoundaryHint() {
-  // Very rough NL polygon (Newfoundland island + part of Labrador) for orientation
-  // Using a simplified rectangle as a visual hint
-  const nlBounds = L.latLngBounds([46.6, -59.5], [60.4, -52.6]);
-  // Don't draw a box — just fit to NL
-  // map.fitBounds(nlBounds);  // already centered
 }
 
 function showMapInfo(lat, lng, label) {

@@ -6,7 +6,6 @@ information from public government sources and cache it locally.
 import json
 import re
 import time
-import os
 from pathlib import Path
 
 import httpx
@@ -14,6 +13,10 @@ from bs4 import BeautifulSoup
 
 CACHE_FILE = Path(__file__).parent / "crown_land_cache.json"
 CACHE_TTL = 86_400  # 24 hours
+
+# In-memory cache avoids disk reads on every request
+_mem_cache: dict | None = None
+_mem_cache_at: float = 0.0
 
 HEADERS = {
     "User-Agent": (
@@ -256,13 +259,14 @@ class CrownLandScraper:
     """
 
     def __init__(self):
+        # Synchronous client — only used at startup/cache-refresh, never mid-request.
         self.client = httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True)
 
     # ------------------------------------------------------------------
-    # Cache helpers
+    # Disk cache helpers
     # ------------------------------------------------------------------
 
-    def _load_cache(self) -> dict | None:
+    def _load_disk_cache(self) -> dict | None:
         if not CACHE_FILE.exists():
             return None
         try:
@@ -273,9 +277,10 @@ class CrownLandScraper:
             pass
         return None
 
-    def _save_cache(self, data: dict) -> None:
-        data["_cached_at"] = time.time()
-        CACHE_FILE.write_text(json.dumps(data, indent=2))
+    def _save_disk_cache(self, data: dict) -> None:
+        # Copy so we don't mutate the caller's dict
+        payload = {**data, "_cached_at": time.time()}
+        CACHE_FILE.write_text(json.dumps(payload, indent=2))
 
     # ------------------------------------------------------------------
     # Scraping
@@ -288,44 +293,25 @@ class CrownLandScraper:
             if r.status_code != 200:
                 return ""
             soup = BeautifulSoup(r.text, "html.parser")
-            # Remove nav, footer, scripts
             for tag in soup(["nav", "footer", "script", "style", "header"]):
                 tag.decompose()
             text = soup.get_text(separator=" ", strip=True)
-            # Collapse whitespace
             return re.sub(r"\s{2,}", " ", text)
         except Exception:
             return ""
 
-    def scrape_all(self) -> dict:
-        """Scrape all NL Crown Lands sources and merge with knowledge base."""
-        cached = self._load_cache()
-        if cached:
-            return cached
-
-        scraped_content: dict[str, str] = {}
-        for url in NL_SOURCES:
-            text = self._scrape_page(url)
-            if text:
-                scraped_content[url] = text[:4000]  # Cap per page
-
-        result = {
-            **KNOWLEDGE_BASE,
-            "scraped_pages": scraped_content,
-            "scraped_urls": list(scraped_content.keys()),
-        }
-        self._save_cache(result)
-        return result
-
     def get_knowledge_base(self) -> dict:
-        """Return knowledge base (from cache or static)."""
-        cached = self._load_cache()
+        """Return knowledge base from disk cache, or fall back to static data."""
+        cached = self._load_disk_cache()
         if cached:
             return cached
         return KNOWLEDGE_BASE
 
 
-# Module-level singleton for use by the AI module
+# ---------------------------------------------------------------------------
+# Module-level API — singleton scraper + two-level (memory → disk) cache
+# ---------------------------------------------------------------------------
+
 _scraper: CrownLandScraper | None = None
 
 
@@ -337,4 +323,16 @@ def get_scraper() -> CrownLandScraper:
 
 
 def get_knowledge_base() -> dict:
-    return get_scraper().get_knowledge_base()
+    """Return knowledge base with in-memory caching (avoids disk read per request)."""
+    global _mem_cache, _mem_cache_at
+    now = time.time()
+    if _mem_cache is not None and now - _mem_cache_at < CACHE_TTL:
+        return _mem_cache
+    _mem_cache = get_scraper().get_knowledge_base()
+    _mem_cache_at = now
+    return _mem_cache
+
+
+def get_kb_section(key: str) -> dict:
+    """Return a top-level section from the knowledge base, falling back to static data."""
+    return get_knowledge_base().get(key, KNOWLEDGE_BASE[key])

@@ -7,11 +7,30 @@ to look up fresh data from the scraper / knowledge base.
 
 import json
 import os
+from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 import anthropic
 
-from scraper import get_knowledge_base, KNOWLEDGE_BASE
+from scraper import get_kb_section, KNOWLEDGE_BASE
+
+# ---------------------------------------------------------------------------
+# Module-level constants and singleton client
+# ---------------------------------------------------------------------------
+
+MAX_TOOL_ROUNDS = 8
+
+# Reuse a single async client across all requests (connection pooling).
+_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_client() -> anthropic.AsyncAnthropic:
+    global _client
+    if _client is None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        _client = anthropic.AsyncAnthropic(api_key=api_key)
+    return _client
+
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -166,16 +185,14 @@ TOOLS = [
 # ---------------------------------------------------------------------------
 
 def _handle_lookup_tenure_info(tenure_type: str) -> str:
-    kb = get_knowledge_base()
-    tenure = kb.get("tenure_types", KNOWLEDGE_BASE["tenure_types"]).get(tenure_type)
+    tenure = get_kb_section("tenure_types").get(tenure_type)
     if not tenure:
         return f"No information found for tenure type: {tenure_type}"
     return json.dumps(tenure, indent=2)
 
 
 def _handle_get_application_steps(tenure_type: str, purpose: str = "") -> str:
-    kb = get_knowledge_base()
-    steps = kb.get("application_steps", KNOWLEDGE_BASE["application_steps"]).get("general", [])
+    steps = get_kb_section("application_steps").get("general", [])
     result = f"Application steps for {tenure_type.replace('_', ' ').title()}"
     if purpose:
         result += f" ({purpose})"
@@ -186,8 +203,7 @@ def _handle_get_application_steps(tenure_type: str, purpose: str = "") -> str:
 
 
 def _handle_lookup_fees(category: str) -> str:
-    kb = get_knowledge_base()
-    fees = kb.get("fees", KNOWLEDGE_BASE["fees"])
+    fees = get_kb_section("fees")
     if category == "all":
         return json.dumps(fees, indent=2)
     data = fees.get(category)
@@ -197,8 +213,7 @@ def _handle_lookup_fees(category: str) -> str:
 
 
 def _handle_lookup_restrictions(topic: str = "") -> str:
-    kb = get_knowledge_base()
-    restrictions = kb.get("restrictions", KNOWLEDGE_BASE["restrictions"])
+    restrictions = get_kb_section("restrictions")
     if not topic:
         return json.dumps(restrictions, indent=2)
     topic_lower = topic.lower()
@@ -218,45 +233,32 @@ def _handle_lookup_restrictions(topic: str = "") -> str:
 
 
 def _handle_find_regional_office(location: str) -> str:
-    kb = get_knowledge_base()
-    offices = kb.get("regional_offices", KNOWLEDGE_BASE["regional_offices"])
+    offices = get_kb_section("regional_offices")
     loc = location.lower()
 
-    # Simple keyword matching
-    mappings = {
-        "labrador": "Happy Valley-Goose Bay",
-        "goose bay": "Happy Valley-Goose Bay",
-        "happy valley": "Happy Valley-Goose Bay",
-        "western": "Corner Brook",
-        "corner brook": "Corner Brook",
-        "stephenville": "Corner Brook",
-        "port aux basques": "Corner Brook",
-        "central": "Gander",
-        "gander": "Gander",
-        "grand falls": "Grand Falls-Windsor",
-        "windsor": "Grand Falls-Windsor",
-        "bishop's falls": "Grand Falls-Windsor",
-        "st. john": "St. John's",
-        "st john": "St. John's",
-        "avalon": "St. John's",
-        "clarenville": "St. John's",
-        "bonavista": "St. John's",
-        "burin": "St. John's",
-        "marystown": "St. John's",
-    }
+    # Build a keyword → office mapping dynamically from the knowledge base
+    # so adding a new office record is the only change required.
+    keyword_map: dict[str, str] = {}
+    for office in offices:
+        name = office["name"]
+        region = office.get("region", "")
+        # Index by office name tokens and region tokens
+        for token in (name + " " + region).lower().split():
+            if len(token) > 3:
+                keyword_map[token] = name
+        # Also index the full name lowercased for exact-ish matches
+        keyword_map[name.lower()] = name
 
-    matched_name = None
-    for keyword, office_name in mappings.items():
-        if keyword in loc:
-            matched_name = office_name
-            break
+    matched_name = next(
+        (keyword_map[kw] for kw in keyword_map if kw in loc),
+        None,
+    )
 
     if matched_name:
         office = next((o for o in offices if o["name"] == matched_name), None)
         if office:
             return json.dumps(office, indent=2)
 
-    # Return all offices if no match
     return (
         f"Could not precisely match '{location}' to a specific office. "
         f"Here are all regional offices:\n{json.dumps(offices, indent=2)}"
@@ -311,9 +313,7 @@ def _handle_recommend_tenure_type(purpose: str, duration: str = "") -> str:
             "It's the quickest and most flexible option while you determine your long-term needs."
         )
 
-    kb = get_knowledge_base()
-    tenure_info = kb.get("tenure_types", KNOWLEDGE_BASE["tenure_types"]).get(rec, {})
-
+    tenure_info = get_kb_section("tenure_types").get(rec, {})
     return json.dumps({
         "recommended_tenure": rec.replace("_", " ").title(),
         "reason": reason,
@@ -323,29 +323,37 @@ def _handle_recommend_tenure_type(purpose: str, duration: str = "") -> str:
     }, indent=2)
 
 
+# Dispatch table — renaming a tool requires only one change here.
+_TOOL_DISPATCH = {
+    "lookup_tenure_info":    lambda i: _handle_lookup_tenure_info(i["tenure_type"]),
+    "get_application_steps": lambda i: _handle_get_application_steps(i["tenure_type"], i.get("purpose", "")),
+    "lookup_fees":           lambda i: _handle_lookup_fees(i["category"]),
+    "lookup_restrictions":   lambda i: _handle_lookup_restrictions(i.get("topic", "")),
+    "find_regional_office":  lambda i: _handle_find_regional_office(i["location"]),
+    "recommend_tenure_type": lambda i: _handle_recommend_tenure_type(i["purpose"], i.get("duration", "")),
+}
+
+
 def execute_tool(name: str, tool_input: dict) -> str:
     """Dispatch a tool call to the appropriate handler."""
+    handler = _TOOL_DISPATCH.get(name)
+    if handler is None:
+        return f"Unknown tool: {name}"
     try:
-        if name == "lookup_tenure_info":
-            return _handle_lookup_tenure_info(tool_input["tenure_type"])
-        elif name == "get_application_steps":
-            return _handle_get_application_steps(
-                tool_input["tenure_type"], tool_input.get("purpose", "")
-            )
-        elif name == "lookup_fees":
-            return _handle_lookup_fees(tool_input["category"])
-        elif name == "lookup_restrictions":
-            return _handle_lookup_restrictions(tool_input.get("topic", ""))
-        elif name == "find_regional_office":
-            return _handle_find_regional_office(tool_input["location"])
-        elif name == "recommend_tenure_type":
-            return _handle_recommend_tenure_type(
-                tool_input["purpose"], tool_input.get("duration", "")
-            )
-        else:
-            return f"Unknown tool: {name}"
+        return handler(tool_input)
     except Exception as exc:
         return f"Tool error: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Pending tool state — keeps the three correlated variables together
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _PendingTool:
+    id: str
+    name: str
+    json_buf: str = field(default="")
 
 
 # ---------------------------------------------------------------------------
@@ -359,18 +367,16 @@ async def stream_chat(messages: list[dict]) -> AsyncGenerator[str, None]:
     Handles the full tool-use loop internally: Claude may call tools
     multiple times before yielding its final text response.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
         yield f"data: {json.dumps({'type': 'error', 'text': 'ANTHROPIC_API_KEY not set. Please add it to your environment.'})}\n\n"
         return
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    current_messages = list(messages)
-    MAX_TOOL_ROUNDS = 8
+    client = _get_client()
+    current_messages = list(messages)  # copy to avoid mutating caller's list
 
-    for round_num in range(MAX_TOOL_ROUNDS):
+    for _ in range(MAX_TOOL_ROUNDS):
         tool_calls: list[dict] = []
-        accumulated_text = ""
+        pending: _PendingTool | None = None
         stop_reason = None
 
         async with client.messages.stream(
@@ -381,56 +387,39 @@ async def stream_chat(messages: list[dict]) -> AsyncGenerator[str, None]:
             messages=current_messages,
             tools=TOOLS,
         ) as stream:
-            current_tool_id = None
-            current_tool_name = None
-            current_tool_json = ""
-
             async for event in stream:
                 etype = event.type
 
                 if etype == "content_block_start":
                     block = event.content_block
                     if block.type == "tool_use":
-                        current_tool_id = block.id
-                        current_tool_name = block.name
-                        current_tool_json = ""
-                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': current_tool_name})}\n\n"
+                        pending = _PendingTool(id=block.id, name=block.name)
+                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': block.name})}\n\n"
 
                 elif etype == "content_block_delta":
                     delta = event.delta
                     if delta.type == "text_delta":
-                        accumulated_text += delta.text
                         yield f"data: {json.dumps({'type': 'text', 'text': delta.text})}\n\n"
-                    elif delta.type == "input_json_delta":
-                        current_tool_json += delta.partial_json
+                    elif delta.type == "input_json_delta" and pending is not None:
+                        pending.json_buf += delta.partial_json
 
-                elif etype == "content_block_stop":
-                    if current_tool_name:
-                        try:
-                            tool_input = json.loads(current_tool_json) if current_tool_json else {}
-                        except json.JSONDecodeError:
-                            tool_input = {}
-                        tool_calls.append({
-                            "id": current_tool_id,
-                            "name": current_tool_name,
-                            "input": tool_input,
-                        })
-                        current_tool_name = None
-                        current_tool_id = None
-                        current_tool_json = ""
+                elif etype == "content_block_stop" and pending is not None:
+                    try:
+                        tool_input = json.loads(pending.json_buf) if pending.json_buf else {}
+                    except json.JSONDecodeError:
+                        tool_input = {}
+                    tool_calls.append({"id": pending.id, "name": pending.name, "input": tool_input})
+                    pending = None
 
                 elif etype == "message_delta":
                     stop_reason = event.delta.stop_reason
 
-            # Grab the full final message to reconstruct content
             final_msg = await stream.get_final_message()
 
-        # If no tool calls, we're done
         if not tool_calls or stop_reason == "end_turn":
             break
 
-        # Execute all tool calls and build the next turn
-        assistant_content = final_msg.content
+        # Execute all tool calls and feed results back
         tool_results = []
         for tc in tool_calls:
             result = execute_tool(tc["name"], tc["input"])
@@ -441,10 +430,9 @@ async def stream_chat(messages: list[dict]) -> AsyncGenerator[str, None]:
                 "content": result,
             })
 
-        # Append assistant turn + tool results to message history
-        current_messages = current_messages + [
-            {"role": "assistant", "content": assistant_content},
+        current_messages.extend([
+            {"role": "assistant", "content": final_msg.content},
             {"role": "user", "content": tool_results},
-        ]
+        ])
 
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
