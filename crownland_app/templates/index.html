@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CrownClaw — NL Crown Land Finder</title>
+
+  <!-- Leaflet map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet Draw (for marking areas) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <!-- Marked (markdown rendering) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <style>
+    /* ============================
+       Design tokens
+       ============================ */
+    :root {
+      --brand-dark:   #0d3b5e;
+      --brand-mid:    #1a6b8a;
+      --brand-light:  #e8f4f8;
+      --accent:       #2ecc71;
+      --accent-dark:  #27ae60;
+      --warn:         #e67e22;
+      --text:         #1a2a3a;
+      --text-muted:   #6b7c8d;
+      --border:       #d0dde8;
+      --bg:           #f4f7fa;
+      --card:         #ffffff;
+      --radius:       10px;
+      --shadow:       0 2px 12px rgba(0,0,0,.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ============================
+       Header
+       ============================ */
+    header {
+      background: var(--brand-dark);
+      color: #fff;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      z-index: 1000;
+      flex-shrink: 0;
+    }
+    header .logo { font-size: 26px; }
+    header h1 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; }
+    header p  { font-size: 12px; opacity: .75; margin-top: 1px; }
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .status-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: #aaa; display: inline-block;
+    }
+    .status-dot.ok { background: var(--accent); }
+    .header-link {
+      color: rgba(255,255,255,.8);
+      font-size: 12px;
+      text-decoration: none;
+    }
+    .header-link:hover { color: #fff; text-decoration: underline; }
+
+    /* ============================
+       Main layout
+       ============================ */
+    .app-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Left panel */
+    .left-panel {
+      width: 380px;
+      min-width: 320px;
+      max-width: 420px;
+      display: flex;
+      flex-direction: column;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: var(--brand-light);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all .15s;
+    }
+    .tab-btn.active {
+      color: var(--brand-mid);
+      border-bottom-color: var(--brand-mid);
+      background: var(--card);
+    }
+    .tab-btn:hover:not(.active) { color: var(--text); }
+
+    .tab-panel { display: none; flex: 1; overflow-y: auto; flex-direction: column; }
+    .tab-panel.active { display: flex; }
+
+    /* ============================
+       Chat panel
+       ============================ */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg {
+      max-width: 92%;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+    .msg.user {
+      background: var(--brand-mid);
+      color: #fff;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.bot {
+      background: var(--brand-light);
+      color: var(--text);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .msg.bot h1,.msg.bot h2,.msg.bot h3 { font-size: 14px; margin: 6px 0 4px; }
+    .msg.bot p  { margin: 4px 0; }
+    .msg.bot ul,.msg.bot ol { padding-left: 18px; }
+    .msg.bot li { margin: 3px 0; }
+    .msg.bot strong { color: var(--brand-dark); }
+    .msg.bot code {
+      background: rgba(0,0,0,.06);
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .msg.bot a { color: var(--brand-mid); }
+
+    .tool-badge {
+      font-size: 11px;
+      background: rgba(26,107,138,.12);
+      color: var(--brand-mid);
+      padding: 2px 8px;
+      border-radius: 20px;
+      align-self: flex-start;
+      margin-bottom: -4px;
+    }
+
+    .typing-indicator {
+      display: flex; gap: 5px; padding: 12px 14px;
+      background: var(--brand-light);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      border-bottom-left-radius: 4px;
+      align-self: flex-start;
+    }
+    .typing-indicator span {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--brand-mid); animation: bounce .9s infinite;
+    }
+    .typing-indicator span:nth-child(2) { animation-delay: .2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: .4s; }
+    @keyframes bounce {
+      0%,60%,100% { transform: translateY(0); }
+      30%          { transform: translateY(-6px); }
+    }
+
+    .chat-input-row {
+      display: flex;
+      padding: 12px;
+      gap: 8px;
+      border-top: 1px solid var(--border);
+      background: var(--card);
+    }
+    .chat-input-row textarea {
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 13.5px;
+      font-family: inherit;
+      resize: none;
+      height: 44px;
+      min-height: 44px;
+      max-height: 120px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .chat-input-row textarea:focus { border-color: var(--brand-mid); }
+    .send-btn {
+      background: var(--brand-mid);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0 16px;
+      font-size: 18px;
+      cursor: pointer;
+      transition: background .15s;
+      height: 44px;
+    }
+    .send-btn:hover { background: var(--brand-dark); }
+    .send-btn:disabled { background: #aaa; cursor: not-allowed; }
+
+    /* Quick prompts */
+    .quick-prompts {
+      padding: 0 12px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .quick-btn {
+      background: var(--brand-light);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--brand-dark);
+      transition: all .15s;
+    }
+    .quick-btn:hover { background: var(--brand-mid); color: #fff; border-color: var(--brand-mid); }
+
+    /* ============================
+       Guide tab
+       ============================ */
+    .guide-container { padding: 16px; }
+    .guide-container h2 {
+      font-size: 15px;
+      color: var(--brand-dark);
+      margin-bottom: 14px;
+    }
+    .step-card {
+      display: flex;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+      transition: border-color .15s;
+    }
+    .step-card:hover { border-color: var(--brand-mid); }
+    .step-num {
+      width: 32px; height: 32px;
+      background: var(--brand-mid);
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .step-content h3 { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    .step-content p  { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+    /* ============================
+       Info tab
+       ============================ */
+    .info-container { padding: 16px; }
+    .info-section { margin-bottom: 20px; }
+    .info-section h2 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--brand-dark);
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid var(--brand-light);
+    }
+    .tenure-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .tenure-card:hover { border-color: var(--brand-mid); background: var(--brand-light); }
+    .tenure-card.expanded { border-color: var(--brand-mid); }
+    .tenure-card h3 {
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .tenure-badge {
+      font-size: 11px;
+      background: var(--brand-mid);
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .tenure-detail {
+      display: none;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .tenure-card.expanded .tenure-detail { display: block; }
+    .tenure-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    .tenure-stat {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+    .tenure-stat strong { display: block; font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+
+    .office-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .office-card h3 { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+    .office-card p  { font-size: 12px; color: var(--text-muted); margin: 2px 0; }
+    .office-card a  { color: var(--brand-mid); text-decoration: none; }
+
+    /* ============================
+       Map panel
+       ============================ */
+    .right-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .map-toolbar {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .map-toolbar label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+    .map-toolbar input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 13px;
+      width: 220px;
+      outline: none;
+    }
+    .map-toolbar input:focus { border-color: var(--brand-mid); }
+    .toolbar-btn {
+      background: var(--brand-mid);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .toolbar-btn:hover { background: var(--brand-dark); }
+    .toolbar-btn.secondary {
+      background: var(--bg);
+      color: var(--brand-dark);
+      border: 1px solid var(--border);
+    }
+    .toolbar-btn.secondary:hover { background: var(--border); }
+
+    #map {
+      flex: 1;
+      z-index: 1;
+    }
+
+    .map-info-box {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      z-index: 500;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      max-width: 260px;
+      box-shadow: var(--shadow);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .map-info-box h4 { font-size: 13px; color: var(--brand-dark); margin-bottom: 6px; }
+    .map-info-box .coord { color: var(--text-muted); font-family: monospace; font-size: 11px; }
+    .map-info-box .ask-btn {
+      margin-top: 8px;
+      background: var(--brand-mid);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      cursor: pointer;
+      width: 100%;
+    }
+    .map-info-box .ask-btn:hover { background: var(--brand-dark); }
+
+    /* ============================
+       Responsive
+       ============================ */
+    @media (max-width: 700px) {
+      .left-panel { width: 100%; max-width: 100%; }
+      .right-panel { display: none; }
+      body { overflow: auto; }
+      .app-body { flex-direction: column; }
+    }
+
+    /* ============================
+       Utility
+       ============================ */
+    .hidden { display: none !important; }
+    .link-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .resource-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--brand-light);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: var(--brand-dark);
+      text-decoration: none;
+      transition: all .15s;
+    }
+    .resource-link:hover { background: var(--brand-mid); color: #fff; }
+
+    .warning-box {
+      background: #fff8f0;
+      border: 1px solid #f0c080;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #7a4f00;
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ================================================================
+     HEADER
+     ================================================================ -->
+<header>
+  <span class="logo">🦞</span>
+  <div>
+    <h1>CrownClaw</h1>
+    <p>Newfoundland &amp; Labrador Crown Land Finder</p>
+  </div>
+  <div class="header-right">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText" style="font-size:12px;opacity:.8">Checking AI…</span>
+    <a href="https://www.gov.nl.ca/crown-lands/" target="_blank" class="header-link">Official Site ↗</a>
+    <a href="https://geonl.gov.nl.ca" target="_blank" class="header-link">GeoNL Map ↗</a>
+  </div>
+</header>
+
+<!-- ================================================================
+     BODY
+     ================================================================ -->
+<div class="app-body">
+
+  <!-- ============================
+       LEFT PANEL
+       ============================ -->
+  <div class="left-panel">
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('chat')">💬 AI Assistant</button>
+      <button class="tab-btn" onclick="switchTab('guide')">📋 How to Apply</button>
+      <button class="tab-btn" onclick="switchTab('info')">ℹ️ Info &amp; Fees</button>
+    </div>
+
+    <!-- =================== CHAT TAB =================== -->
+    <div class="tab-panel active" id="tab-chat">
+      <div class="chat-messages" id="chatMessages">
+        <!-- Welcome message -->
+        <div class="msg bot">
+          <strong>👋 Hi, I'm CrownClaw!</strong><br><br>
+          I help you find and apply for Crown Land in Newfoundland and Labrador — in plain language, no confusing government jargon.<br><br>
+          Tell me what you're looking for — a cabin spot, farmland, business use — and I'll guide you through the whole process.
+        </div>
+      </div>
+
+      <!-- Quick prompts -->
+      <div class="quick-prompts" id="quickPrompts">
+        <button class="quick-btn" onclick="sendQuick('I want to find a spot for a recreational cabin')">🏠 Cabin lot</button>
+        <button class="quick-btn" onclick="sendQuick('What are the fees for Crown Land?')">💲 Fees</button>
+        <button class="quick-btn" onclick="sendQuick('How do I apply for Crown Land?')">📝 Application process</button>
+        <button class="quick-btn" onclick="sendQuick('What types of Crown Land tenure are available?')">📋 Tenure types</button>
+        <button class="quick-btn" onclick="sendQuick('Are there any restrictions I should know about?')">⛔ Restrictions</button>
+        <button class="quick-btn" onclick="sendQuick('Which regional office serves my area?')">📞 Find office</button>
+      </div>
+
+      <!-- Input -->
+      <div class="chat-input-row">
+        <textarea
+          id="chatInput"
+          placeholder="Ask about Crown Land in NL…"
+          onkeydown="handleKey(event)"
+        ></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+      </div>
+    </div>
+
+    <!-- =================== GUIDE TAB =================== -->
+    <div class="tab-panel" id="tab-guide">
+      <div class="guide-container">
+        <div class="warning-box">
+          ⚠️ This guide is for general information only. Always verify current requirements at
+          <a href="https://www.gov.nl.ca/crown-lands/" target="_blank">gov.nl.ca/crown-lands</a>.
+        </div>
+        <h2>Step-by-Step Application Process</h2>
+        <div id="stepsContainer">Loading steps…</div>
+
+        <div class="info-section" style="margin-top:20px">
+          <h2>Helpful Links</h2>
+          <div class="link-row">
+            <a class="resource-link" href="https://www.gov.nl.ca/crown-lands/" target="_blank">📄 Crown Lands Home</a>
+            <a class="resource-link" href="https://crownlands.gov.nl.ca" target="_blank">🖥️ Online Application</a>
+            <a class="resource-link" href="https://geonl.gov.nl.ca" target="_blank">🗺️ GeoNL Map Viewer</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =================== INFO TAB =================== -->
+    <div class="tab-panel" id="tab-info">
+      <div class="info-container">
+
+        <!-- Tenure Types -->
+        <div class="info-section">
+          <h2>Tenure Types</h2>
+          <div id="tenureContainer">Loading…</div>
+        </div>
+
+        <!-- Fees -->
+        <div class="info-section">
+          <h2>Fee Schedule</h2>
+          <div id="feesContainer">Loading…</div>
+        </div>
+
+        <!-- Regional Offices -->
+        <div class="info-section">
+          <h2>Regional Offices</h2>
+          <div id="officesContainer">Loading…</div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /left-panel -->
+
+  <!-- ============================
+       RIGHT PANEL (MAP)
+       ============================ -->
+  <div class="right-panel">
+
+    <!-- Map toolbar -->
+    <div class="map-toolbar">
+      <label>Search location:</label>
+      <input type="text" id="locationSearch" placeholder="e.g. Gander, Clarenville, Twillingate" />
+      <button class="toolbar-btn" onclick="searchLocation()">🔍 Go</button>
+      <button class="toolbar-btn secondary" onclick="resetMap()">↺ Reset</button>
+      <span style="font-size:12px;color:var(--text-muted);margin-left:4px">
+        Click the map to mark a parcel of interest
+      </span>
+    </div>
+
+    <!-- Map -->
+    <div id="map"></div>
+
+    <!-- Floating info box (shown on click) -->
+    <div class="map-info-box hidden" id="mapInfoBox">
+      <h4>📍 Selected Location</h4>
+      <p class="coord" id="mapCoordText"></p>
+      <p id="mapNoteText" style="margin-top:6px;color:var(--text-muted)">
+        Use the AI assistant to find out about Crown Land at this location.
+      </p>
+      <button class="ask-btn" onclick="askAboutLocation()">Ask CrownClaw about this area →</button>
+    </div>
+
+  </div><!-- /right-panel -->
+
+</div><!-- /app-body -->
+
+
+<!-- ================================================================
+     JAVASCRIPT
+     ================================================================ -->
+<script>
+/* ----------------------------------------------------------------
+   State
+   ---------------------------------------------------------------- */
+let messages = [];          // conversation history
+let isStreaming = false;
+let selectedLatLng = null;  // from map click
+let map, markerLayer, drawLayer;
+
+/* ----------------------------------------------------------------
+   Tab switching
+   ---------------------------------------------------------------- */
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    const tabNames = ['chat', 'guide', 'info'];
+    b.classList.toggle('active', tabNames[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+/* ----------------------------------------------------------------
+   Health check
+   ---------------------------------------------------------------- */
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    const dot  = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    if (d.ai_ready) {
+      dot.className = 'status-dot ok';
+      text.textContent = 'AI Ready';
+    } else {
+      dot.className = 'status-dot';
+      text.textContent = 'No API key';
+    }
+  } catch(e) {
+    document.getElementById('statusText').textContent = 'Offline';
+  }
+}
+
+/* ----------------------------------------------------------------
+   Chat
+   ---------------------------------------------------------------- */
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+async function sendQuick(text) {
+  document.getElementById('chatInput').value = text;
+  sendMessage();
+}
+
+async function sendMessage() {
+  if (isStreaming) return;
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = '';
+  input.style.height = '44px';
+  hideQuickPrompts();
+
+  // Add user message
+  appendMessage('user', text);
+  messages.push({ role: 'user', content: text });
+
+  // Show typing indicator
+  const typingEl = appendTyping();
+  isStreaming = true;
+  document.getElementById('sendBtn').disabled = true;
+
+  // Start streaming bot response
+  const botEl = document.createElement('div');
+  botEl.className = 'msg bot';
+  let accumulatedMd = '';
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages })
+    });
+
+    typingEl.remove();
+    document.querySelector('.chat-messages').appendChild(botEl);
+    scrollChat();
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // keep incomplete last line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'text') {
+            accumulatedMd += ev.text;
+            botEl.innerHTML = marked.parse(accumulatedMd);
+            scrollChat();
+          } else if (ev.type === 'tool_start') {
+            // Show "looking up…" badge above the typing message
+            const badge = document.createElement('div');
+            badge.className = 'tool-badge';
+            badge.id = 'tool-badge-active';
+            badge.textContent = `🔍 Looking up ${ev.tool.replace(/_/g, ' ')}…`;
+            botEl.before(badge);
+          } else if (ev.type === 'tool_result') {
+            const oldBadge = document.getElementById('tool-badge-active');
+            if (oldBadge) oldBadge.remove();
+          } else if (ev.type === 'done') {
+            // Save assistant message
+            messages.push({ role: 'assistant', content: accumulatedMd });
+          } else if (ev.type === 'error') {
+            botEl.innerHTML = `<span style="color:#c0392b">⚠️ ${ev.text}</span>`;
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (err) {
+    typingEl.remove();
+    appendMessage('bot', '⚠️ Connection error. Please try again.');
+  } finally {
+    isStreaming = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+function appendMessage(role, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  if (role === 'bot') {
+    el.innerHTML = marked.parse(text);
+  } else {
+    el.textContent = text;
+  }
+  document.querySelector('.chat-messages').appendChild(el);
+  scrollChat();
+  return el;
+}
+
+function appendTyping() {
+  const el = document.createElement('div');
+  el.className = 'typing-indicator';
+  el.innerHTML = '<span></span><span></span><span></span>';
+  document.querySelector('.chat-messages').appendChild(el);
+  scrollChat();
+  return el;
+}
+
+function scrollChat() {
+  const c = document.querySelector('.chat-messages');
+  c.scrollTop = c.scrollHeight;
+}
+
+function hideQuickPrompts() {
+  document.getElementById('quickPrompts').classList.add('hidden');
+}
+
+// Auto-resize textarea
+document.getElementById('chatInput').addEventListener('input', function() {
+  this.style.height = '44px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+/* ----------------------------------------------------------------
+   Guide tab
+   ---------------------------------------------------------------- */
+async function loadGuide() {
+  const r = await fetch('/api/guide');
+  const d = await r.json();
+  const container = document.getElementById('stepsContainer');
+  container.innerHTML = '';
+  d.steps.forEach(step => {
+    const card = document.createElement('div');
+    card.className = 'step-card';
+    card.innerHTML = `
+      <div class="step-num">${step.step}</div>
+      <div class="step-content">
+        <h3>${step.title}</h3>
+        <p>${step.detail}</p>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+/* ----------------------------------------------------------------
+   Info tab — tenure types
+   ---------------------------------------------------------------- */
+async function loadTenureTypes() {
+  const r = await fetch('/api/tenure-types');
+  const types = await r.json();
+  const container = document.getElementById('tenureContainer');
+  container.innerHTML = '';
+
+  const labels = {
+    licence_of_occupation: 'Licence of Occupation',
+    lease: 'Lease',
+    grant: 'Grant (Fee Simple)',
+    easement: 'Easement',
+  };
+
+  Object.entries(types).forEach(([key, t]) => {
+    const card = document.createElement('div');
+    card.className = 'tenure-card';
+    card.innerHTML = `
+      <h3>
+        ${labels[key] || t.name}
+        <span class="tenure-badge">$${t.application_fee || '?'} app. fee</span>
+      </h3>
+      <div class="tenure-detail">
+        <p>${t.description}</p>
+        <div class="tenure-row">
+          <div class="tenure-stat">
+            <strong>Annual Cost</strong>
+            ${t.typical_annual_rent || t.purchase_price || t.annual_fee || 'N/A'}
+          </div>
+          <div class="tenure-stat">
+            <strong>Processing</strong>
+            ${t.processing_time || '?'}
+          </div>
+          <div class="tenure-stat">
+            <strong>Survey</strong>
+            ${t.survey_required === true ? 'Required' : t.survey_required === false ? 'Usually not' : t.survey_required}
+          </div>
+        </div>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      card.classList.toggle('expanded');
+    });
+    container.appendChild(card);
+  });
+}
+
+/* ----------------------------------------------------------------
+   Info tab — fees
+   ---------------------------------------------------------------- */
+async function loadFees() {
+  const r = await fetch('/api/fees');
+  const fees = await r.json();
+  const container = document.getElementById('feesContainer');
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  html += '<thead><tr style="background:var(--brand-light)">';
+  html += '<th style="padding:8px;text-align:left;border:1px solid var(--border)">Type</th>';
+  html += '<th style="padding:8px;text-align:left;border:1px solid var(--border)">Application Fee</th>';
+  html += '</tr></thead><tbody>';
+
+  Object.entries(fees.application_fees || {}).forEach(([k, v]) => {
+    html += `<tr>
+      <td style="padding:7px 8px;border:1px solid var(--border);text-transform:capitalize">${k.replace(/_/g,' ')}</td>
+      <td style="padding:7px 8px;border:1px solid var(--border)">${v}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+
+  const rent = fees.annual_rent || {};
+  html += `<div style="margin-top:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;line-height:1.7">
+    <strong>Annual Rent</strong><br>
+    Licence: ${rent.licence_rate || 'N/A'}<br>
+    Lease: ${rent.lease_rate || 'N/A'}<br>
+    <span style="color:var(--text-muted)">${rent.review_period || ''}</span>
+  </div>`;
+
+  const other = fees.other_costs || {};
+  if (Object.keys(other).length) {
+    html += `<div style="margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.8">
+      <strong style="color:var(--text)">Other costs:</strong><br>`;
+    Object.entries(other).forEach(([k, v]) => {
+      html += `${k.charAt(0).toUpperCase()+k.slice(1)}: ${v}<br>`;
+    });
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+/* ----------------------------------------------------------------
+   Info tab — offices
+   ---------------------------------------------------------------- */
+async function loadOffices() {
+  const r = await fetch('/api/offices');
+  const offices = await r.json();
+  const container = document.getElementById('officesContainer');
+  container.innerHTML = '';
+  offices.forEach(o => {
+    const card = document.createElement('div');
+    card.className = 'office-card';
+    card.innerHTML = `
+      <h3>📍 ${o.name}</h3>
+      <p>${o.region}</p>
+      <p>📞 <a href="tel:${o.phone}">${o.phone}</a></p>
+      ${o.address ? `<p style="color:var(--text-muted)">${o.address}</p>` : ''}
+    `;
+    container.appendChild(card);
+  });
+}
+
+/* ----------------------------------------------------------------
+   Map
+   ---------------------------------------------------------------- */
+function initMap() {
+  // Centre on Newfoundland
+  map = L.map('map', {
+    center: [53.0, -60.0],
+    zoom: 6,
+    zoomControl: true,
+  });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 18,
+  }).addTo(map);
+
+  // Layer for user markers
+  markerLayer = L.layerGroup().addTo(map);
+
+  // Draw controls for marking areas of interest
+  drawLayer = new L.FeatureGroup().addTo(map);
+  const drawControl = new L.Control.Draw({
+    edit: { featureGroup: drawLayer },
+    draw: {
+      polygon: { shapeOptions: { color: '#1a6b8a' } },
+      rectangle: { shapeOptions: { color: '#1a6b8a' } },
+      circle: false,
+      polyline: false,
+      marker: false,
+      circlemarker: false,
+    }
+  });
+  map.addControl(drawControl);
+
+  map.on(L.Draw.Event.CREATED, function(e) {
+    drawLayer.clearLayers();
+    drawLayer.addLayer(e.layer);
+    const bounds = e.layer.getBounds ? e.layer.getBounds() : null;
+    if (bounds) {
+      const center = bounds.getCenter();
+      showMapInfo(center.lat, center.lng, 'Marked area');
+    }
+  });
+
+  // Click to mark a spot
+  map.on('click', function(e) {
+    const { lat, lng } = e.latlng;
+    markerLayer.clearLayers();
+    L.marker([lat, lng], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="font-size:24px;margin-top:-12px;margin-left:-12px">📍</div>',
+        iconSize: [24, 24],
+      })
+    }).addTo(markerLayer);
+    showMapInfo(lat, lng, null);
+  });
+
+  // NL province outline (simplified bounding box)
+  addNLBoundaryHint();
+}
+
+function addNLBoundaryHint() {
+  // Very rough NL polygon (Newfoundland island + part of Labrador) for orientation
+  // Using a simplified rectangle as a visual hint
+  const nlBounds = L.latLngBounds([46.6, -59.5], [60.4, -52.6]);
+  // Don't draw a box — just fit to NL
+  // map.fitBounds(nlBounds);  // already centered
+}
+
+function showMapInfo(lat, lng, label) {
+  selectedLatLng = { lat, lng };
+  const box = document.getElementById('mapInfoBox');
+  box.classList.remove('hidden');
+  document.getElementById('mapCoordText').textContent =
+    `Lat: ${lat.toFixed(5)}  Lng: ${lng.toFixed(5)}`;
+  if (label) {
+    document.getElementById('mapNoteText').textContent = label;
+  }
+}
+
+function askAboutLocation() {
+  if (!selectedLatLng) return;
+  const { lat, lng } = selectedLatLng;
+  const prompt = `I'm interested in Crown Land near coordinates ${lat.toFixed(4)}, ${lng.toFixed(4)} in Newfoundland. Can you help me understand what's involved in applying for land in that area?`;
+  switchTab('chat');
+  document.getElementById('chatInput').value = prompt;
+  sendMessage();
+}
+
+async function searchLocation() {
+  const q = document.getElementById('locationSearch').value.trim();
+  if (!q) return;
+  try {
+    // Use Nominatim for geocoding
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q + ', Newfoundland')}&format=json&limit=1`;
+    const r = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+    const data = await r.json();
+    if (data.length > 0) {
+      const { lat, lon, display_name } = data[0];
+      map.setView([parseFloat(lat), parseFloat(lon)], 12);
+      L.popup()
+        .setLatLng([lat, lon])
+        .setContent(`<strong>${display_name}</strong>`)
+        .openOn(map);
+    } else {
+      alert(`Could not find "${q}" — try a different town name or community.`);
+    }
+  } catch(e) {
+    alert('Location search failed. Check your connection and try again.');
+  }
+}
+
+function resetMap() {
+  map.setView([53.0, -60.0], 6);
+  markerLayer.clearLayers();
+  drawLayer.clearLayers();
+  document.getElementById('mapInfoBox').classList.add('hidden');
+  document.getElementById('locationSearch').value = '';
+  selectedLatLng = null;
+}
+
+/* ----------------------------------------------------------------
+   Init
+   ---------------------------------------------------------------- */
+window.addEventListener('DOMContentLoaded', async () => {
+  checkHealth();
+  initMap();
+  loadGuide();
+  loadTenureTypes();
+  loadFees();
+  loadOffices();
+});
+</script>
+
+</body>
+</html>
