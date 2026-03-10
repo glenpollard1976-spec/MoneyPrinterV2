@@ -15,6 +15,7 @@ from classes.YouTube import YouTube
 from prettytable import PrettyTable
 from classes.Outreach import Outreach
 from classes.AFM import AffiliateMarketing
+from classes.OpenClaw import OpenClaw
 
 def main():
     """Main entry point for the application, providing a menu-driven interface
@@ -406,6 +407,19 @@ def main():
 
         outreach.start()
     elif user_input == 5:
+        info("Starting OpenClaw...")
+
+        query = question(" => Enter search keyword / niche (e.g. 'plumber London'): ")
+        max_results_str = question(" => Max pages to crawl (default 20): ").strip()
+        max_results = int(max_results_str) if max_results_str.isdigit() else 20
+
+        output_path = question(
+            " => Output CSV path (default: openclaw_leads.csv): "
+        ).strip() or "openclaw_leads.csv"
+
+        claw = OpenClaw(query=query, max_results=max_results)
+        claw.start(output_path)
+    elif user_input == 6:
         if get_verbose():
             print(colored(" => Quitting...", "blue"))
         sys.exit(0)
