@@ -9,6 +9,13 @@ Run with:
 import os
 from pathlib import Path
 
+# Load .env from the app directory (safe no-op if file doesn't exist)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles

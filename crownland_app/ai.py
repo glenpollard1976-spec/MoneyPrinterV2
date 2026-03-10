@@ -22,13 +22,16 @@ MAX_TOOL_ROUNDS = 8
 
 # Reuse a single async client across all requests (connection pooling).
 _client: anthropic.AsyncAnthropic | None = None
+_client_key: str = ""
 
 
 def _get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        _client = anthropic.AsyncAnthropic(api_key=api_key)
+    """Return the singleton async client, rebuilding it if the key changed."""
+    global _client, _client_key
+    current_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if _client is None or current_key != _client_key:
+        _client = anthropic.AsyncAnthropic(api_key=current_key or None)
+        _client_key = current_key
     return _client
 
 
@@ -360,79 +363,103 @@ class _PendingTool:
 # Streaming chat with agentic tool loop
 # ---------------------------------------------------------------------------
 
+def _sse_error(msg: str) -> str:
+    return f"data: {json.dumps({'type': 'error', 'text': msg})}\n\n"
+
+
 async def stream_chat(messages: list[dict]) -> AsyncGenerator[str, None]:
     """
     Streaming generator that yields SSE-formatted data strings.
 
     Handles the full tool-use loop internally: Claude may call tools
     multiple times before yielding its final text response.
+    All Anthropic API errors are caught and surfaced as SSE error events
+    so the browser always receives a proper message.
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        yield f"data: {json.dumps({'type': 'error', 'text': 'ANTHROPIC_API_KEY not set. Please add it to your environment.'})}\n\n"
+        yield _sse_error(
+            "ANTHROPIC_API_KEY is not set. "
+            "Add it to crownland_app/.env and restart the server."
+        )
         return
 
     client = _get_client()
     current_messages = list(messages)  # copy to avoid mutating caller's list
 
-    for _ in range(MAX_TOOL_ROUNDS):
-        tool_calls: list[dict] = []
-        pending: _PendingTool | None = None
-        stop_reason = None
+    try:
+        for _ in range(MAX_TOOL_ROUNDS):
+            tool_calls: list[dict] = []
+            pending: _PendingTool | None = None
+            stop_reason = None
 
-        async with client.messages.stream(
-            model="claude-opus-4-6",
-            max_tokens=2048,
-            thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
-            messages=current_messages,
-            tools=TOOLS,
-        ) as stream:
-            async for event in stream:
-                etype = event.type
+            async with client.messages.stream(
+                model="claude-opus-4-6",
+                max_tokens=2048,
+                thinking={"type": "adaptive"},
+                system=SYSTEM_PROMPT,
+                messages=current_messages,
+                tools=TOOLS,
+            ) as stream:
+                async for event in stream:
+                    etype = event.type
 
-                if etype == "content_block_start":
-                    block = event.content_block
-                    if block.type == "tool_use":
-                        pending = _PendingTool(id=block.id, name=block.name)
-                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': block.name})}\n\n"
+                    if etype == "content_block_start":
+                        block = event.content_block
+                        if block.type == "tool_use":
+                            pending = _PendingTool(id=block.id, name=block.name)
+                            yield f"data: {json.dumps({'type': 'tool_start', 'tool': block.name})}\n\n"
 
-                elif etype == "content_block_delta":
-                    delta = event.delta
-                    if delta.type == "text_delta":
-                        yield f"data: {json.dumps({'type': 'text', 'text': delta.text})}\n\n"
-                    elif delta.type == "input_json_delta" and pending is not None:
-                        pending.json_buf += delta.partial_json
+                    elif etype == "content_block_delta":
+                        delta = event.delta
+                        if delta.type == "text_delta":
+                            yield f"data: {json.dumps({'type': 'text', 'text': delta.text})}\n\n"
+                        elif delta.type == "input_json_delta" and pending is not None:
+                            pending.json_buf += delta.partial_json
 
-                elif etype == "content_block_stop" and pending is not None:
-                    try:
-                        tool_input = json.loads(pending.json_buf) if pending.json_buf else {}
-                    except json.JSONDecodeError:
-                        tool_input = {}
-                    tool_calls.append({"id": pending.id, "name": pending.name, "input": tool_input})
-                    pending = None
+                    elif etype == "content_block_stop" and pending is not None:
+                        try:
+                            tool_input = json.loads(pending.json_buf) if pending.json_buf else {}
+                        except json.JSONDecodeError:
+                            tool_input = {}
+                        tool_calls.append({"id": pending.id, "name": pending.name, "input": tool_input})
+                        pending = None
 
-                elif etype == "message_delta":
-                    stop_reason = event.delta.stop_reason
+                    elif etype == "message_delta":
+                        stop_reason = event.delta.stop_reason
 
-            final_msg = await stream.get_final_message()
+                final_msg = await stream.get_final_message()
 
-        if not tool_calls or stop_reason == "end_turn":
-            break
+            if not tool_calls or stop_reason == "end_turn":
+                break
 
-        # Execute all tool calls and feed results back
-        tool_results = []
-        for tc in tool_calls:
-            result = execute_tool(tc["name"], tc["input"])
-            yield f"data: {json.dumps({'type': 'tool_result', 'tool': tc['name'], 'preview': result[:80]})}\n\n"
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tc["id"],
-                "content": result,
-            })
+            # Execute all tool calls and feed results back
+            tool_results = []
+            for tc in tool_calls:
+                result = execute_tool(tc["name"], tc["input"])
+                yield f"data: {json.dumps({'type': 'tool_result', 'tool': tc['name'], 'preview': result[:80]})}\n\n"
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": result,
+                })
 
-        current_messages.extend([
-            {"role": "assistant", "content": final_msg.content},
-            {"role": "user", "content": tool_results},
-        ])
+            current_messages.extend([
+                {"role": "assistant", "content": final_msg.content},
+                {"role": "user", "content": tool_results},
+            ])
+
+    except anthropic.AuthenticationError:
+        yield _sse_error(
+            "Invalid API key. Check ANTHROPIC_API_KEY in crownland_app/.env — "
+            "get a valid key at console.anthropic.com."
+        )
+    except anthropic.RateLimitError:
+        yield _sse_error("Rate limit reached. Please wait a moment and try again.")
+    except anthropic.APIConnectionError:
+        yield _sse_error("Could not reach the Anthropic API. Check your internet connection.")
+    except anthropic.APIStatusError as exc:
+        yield _sse_error(f"Anthropic API error {exc.status_code}: {exc.message}")
+    except Exception as exc:
+        yield _sse_error(f"Unexpected error: {exc}")
 
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
