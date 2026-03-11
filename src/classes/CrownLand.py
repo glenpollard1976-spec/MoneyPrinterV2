@@ -1,6 +1,9 @@
 """
 Crown Land module for fetching and displaying available crown land parcels
-from the British Columbia government open data API.
+from the Newfoundland and Labrador government Land Use Atlas ArcGIS REST API.
+
+Source: https://www.gov.nl.ca/landuseatlasmaps/rest/services/LandUseDetails/MapServer
+Crown Titles layer ID: 3
 """
 import requests
 
@@ -9,31 +12,29 @@ from prettytable import PrettyTable
 from termcolor import colored
 
 
+# NL Land Use Atlas — Crown Titles (Layer 3) ArcGIS REST query endpoint
 CROWN_LAND_API = (
-    "https://openmaps.gov.bc.ca/geo/pub/"
-    "WHSE_TANTALIS.TA_CROWN_TENURES_SVW/wfs"
-    "?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature"
-    "&outputFormat=application/json"
-    "&typeNames=WHSE_TANTALIS.TA_CROWN_TENURES_SVW"
-    "&CQL_FILTER=TENURE_STATUS=%27ACCEPTED%27"
-    "&count=50"
-    "&propertyName=TENURE_TYPE,TENURE_SUBTYPE,TENURE_STATUS,"
-    "TENURE_STAGE,INTRID_SID,TENURE_AREA_IN_HECTARES,"
-    "RESPONSIBLE_BUSINESS_UNIT"
+    "https://www.gov.nl.ca/landuseatlasmaps/rest/services/"
+    "LandUseDetails/MapServer/3/query"
+    "?f=json"
+    "&where=1%3D1"
+    "&outFields=TITLENO,TITLETYPE,TITLESTATUS,APPLICANT,AREA_HA,DISTRICT,PURPOSE"
+    "&returnGeometry=false"
+    "&resultRecordCount=50"
 )
 
 
 class CrownLand:
-    """Fetches and displays available crown land data from the BC open data API."""
+    """Fetches and displays crown land title data from the NL Land Use Atlas API."""
 
     def fetch_available(self) -> list:
-        """Fetch available crown land parcels from the BC government WFS API.
+        """Fetch crown land titles from the NL government ArcGIS REST API.
 
         Returns:
-            list: A list of crown land feature dicts, or empty list on failure.
+            list: A list of feature attribute dicts, or empty list on failure.
         """
         try:
-            info(" => Fetching available crown land data...")
+            info(" => Fetching Newfoundland crown land data...")
             response = requests.get(CROWN_LAND_API, timeout=15)
             response.raise_for_status()
             data = response.json()
@@ -49,7 +50,7 @@ class CrownLand:
         return []
 
     def show(self) -> None:
-        """Display available crown land parcels in a formatted table."""
+        """Display Newfoundland crown land titles in a formatted table."""
         features = self.fetch_available()
 
         if not features:
@@ -58,23 +59,23 @@ class CrownLand:
 
         table = PrettyTable()
         table.field_names = [
-            "ID", "Parcel ID", "Type", "Subtype", "Status",
-            "Stage", "Area (ha)", "Business Unit"
+            "ID", "Title No.", "Type", "Status",
+            "Applicant", "Area (ha)", "District", "Purpose"
         ]
-        table.max_width = 25
+        table.max_width = 22
 
         for idx, feature in enumerate(features, start=1):
-            props = feature.get("properties", {})
+            attrs = feature.get("attributes", {})
             table.add_row([
                 idx,
-                colored(str(props.get("INTRID_SID", "N/A")), "cyan"),
-                colored(str(props.get("TENURE_TYPE", "N/A")), "yellow"),
-                colored(str(props.get("TENURE_SUBTYPE", "N/A")), "magenta"),
-                colored(str(props.get("TENURE_STATUS", "N/A")), "green"),
-                colored(str(props.get("TENURE_STAGE", "N/A")), "blue"),
-                colored(str(props.get("TENURE_AREA_IN_HECTARES", "N/A")), "white"),
-                colored(str(props.get("RESPONSIBLE_BUSINESS_UNIT", "N/A")), "white"),
+                colored(str(attrs.get("TITLENO", "N/A")), "cyan"),
+                colored(str(attrs.get("TITLETYPE", "N/A")), "yellow"),
+                colored(str(attrs.get("TITLESTATUS", "N/A")), "green"),
+                colored(str(attrs.get("APPLICANT", "N/A")), "magenta"),
+                colored(str(attrs.get("AREA_HA", "N/A")), "white"),
+                colored(str(attrs.get("DISTRICT", "N/A")), "blue"),
+                colored(str(attrs.get("PURPOSE", "N/A")), "white"),
             ])
 
         print(table)
-        success(f" => Showing {len(features)} available crown land parcel(s).")
+        success(f" => Showing {len(features)} Newfoundland crown land title(s).")
