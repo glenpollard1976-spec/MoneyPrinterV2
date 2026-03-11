@@ -15,6 +15,7 @@ from classes.YouTube import YouTube
 from prettytable import PrettyTable
 from classes.Outreach import Outreach
 from classes.AFM import AffiliateMarketing
+from classes.CrownLand import CrownLand
 
 def main():
     """Main entry point for the application, providing a menu-driven interface
@@ -406,6 +407,10 @@ def main():
 
         outreach.start()
     elif user_input == 5:
+        info("Fetching available Crown Land...")
+        crown_land = CrownLand()
+        crown_land.show()
+    elif user_input == 6:
         if get_verbose():
             print(colored(" => Quitting...", "blue"))
         sys.exit(0)

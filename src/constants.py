@@ -11,6 +11,7 @@ OPTIONS = [
     "Twitter Bot",
     "Affiliate Marketing",
     "Outreach",
+    "Show Crown Land",
     "Quit"
 ]
 
