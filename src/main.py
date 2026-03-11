@@ -407,9 +407,8 @@ def main():
 
         outreach.start()
     elif user_input == 5:
-        info("Fetching available Crown Land...")
         crown_land = CrownLand()
-        crown_land.show()
+        crown_land.buy_wizard()
     elif user_input == 6:
         if get_verbose():
             print(colored(" => Quitting...", "blue"))
