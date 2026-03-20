@@ -1,0 +1,25 @@
+# ============================================================
+# Netlify configuration for CrownworksNL backend
+# Place this file in the repo root (or merge into the existing
+# netlify.toml if one already exists on the Netlify site).
+# ============================================================
+
+[build]
+  # Install backend dependencies before the function bundle is built
+  command   = "cd backend && npm ci"
+  functions = "backend/netlify/functions"
+
+# Rewrite /api/* → Netlify Function
+[[redirects]]
+  from   = "/api/*"
+  to     = "/.netlify/functions/api/:splat"
+  status = 200
+  force  = true
+
+[functions]
+  # Bundle each function with its node_modules
+  node_bundler = "esbuild"
+
+[functions."api"]
+  # Increase timeout for AI-heavy operations (Pro plan only)
+  # timeout = 26
