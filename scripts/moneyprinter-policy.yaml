@@ -1,0 +1,35 @@
+# NemoClaw Sandbox Security Policy
+# Applied to: moneyprinter-agent
+# Grants scoped filesystem access and routes inference to local RTX 4080
+
+sandbox:
+  name: moneyprinter-agent
+
+filesystem:
+  allow:
+    - path: "${PROJECT_ROOT}"
+      access: read_write
+    - path: "${PROJECT_ROOT}/.mp"
+      access: read_write
+    - path: "${PROJECT_ROOT}/Songs"
+      access: read_write
+  deny:
+    - path: "/"
+      access: all
+    - path: "${HOME}/.ssh"
+      access: all
+    - path: "${HOME}/.aws"
+      access: all
+
+inference:
+  provider: local
+  runtime: nvidia-container-toolkit
+  model: nemotron-3-super-120b
+  device: rtx4080
+  gateway_port: 18789
+
+network:
+  allow_outbound:
+    - build.nvidia.com
+  deny_outbound:
+    - "*"
